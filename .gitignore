@@ -1,0 +1,23 @@
+# Environments
+.env
+.env.*
+env.local
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Outputs
+outputs/
+
+# Inputs
+inputs_front3/
+inputs_raw/
+
+# Streamlit
+.streamlit/
+
+# macOS
+.DS_Store
+
