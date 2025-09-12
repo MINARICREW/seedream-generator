@@ -12,9 +12,7 @@ __pycache__/
 outputs/
 
 # Inputs
-inputs_front2/
-inputs_front3/
-inputs_raw/
+inputs*/
 
 # Streamlit
 .streamlit/
