@@ -663,7 +663,13 @@ def render_form(output_dir: Path) -> None:
         )
         if loaded_names_boot:
             st.info(f"Using {len(loaded_names_boot)} groups loaded from folder")
-        num_prompts = st.number_input("Number of prompts", min_value=1, max_value=100, value=3)
+        num_prompts = st.number_input(
+            "Number of prompts",
+            min_value=1,
+            max_value=100,
+            value=int(st.session_state.get("grid_num_prompts", 3)),
+            key="grid_num_prompts",
+        )
         repeat_single_prompt = st.checkbox(
             "Repeat single prompt across count",
             value=bool(st.session_state.get("grid_prompt_repeat", False)),
@@ -821,7 +827,7 @@ def render_form(output_dir: Path) -> None:
                                     st.session_state["grid_loaded_group_paths"] = paths0
                                     st.session_state["grid_loaded_group_vars"] = vars0
                                     st.session_state["grid_loaded_group_dirs"] = dirs0
-                                    st.session_state["grid_num_groups"] = max(1, min(50, len(names0)))
+                                    st.session_state["grid_num_groups"] = max(1, min(10, len(names0)))
                             except Exception:
                                 pass
                         if del_clicked and loaded_names is not None and can_delete:
@@ -850,7 +856,7 @@ def render_form(output_dir: Path) -> None:
                                         st.session_state.pop("grid_loaded_group_dirs", None)
                                         st.session_state["grid_num_groups"] = 1
                                     else:
-                                        st.session_state["grid_num_groups"] = max(1, min(50, len(names0)))
+                                        st.session_state["grid_num_groups"] = max(1, min(10, len(names0)))
                             except Exception:
                                 pass
                 files = None
