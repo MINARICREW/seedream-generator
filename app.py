@@ -588,7 +588,7 @@ def render_form(output_dir: Path) -> None:
                         "The model is not activated for your account. Go to Ark Console → Model List → Seedream 4.0 and click Activate. Then retry."
                     )
     with tabs[2]:
-        st.subheader("Grid Generator: up to 10 reference groups × 10 prompts")
+        st.subheader("Grid Generator: up to 10 reference groups × 100 prompts")
         st.caption("Uses current model. Watermark is disabled. Seed is applied only on models that support it.")
 
         # Optional: load groups from a root folder (top-level dirs only)
@@ -599,21 +599,52 @@ def render_form(output_dir: Path) -> None:
             root_path = Path(groups_root)
             names: List[str] = []
             paths_by_group: List[List[Path]] = []
+            vars_by_group: List[dict] = []
+            group_dirs: List[str] = []
             if root_path.exists() and root_path.is_dir():
                 subdirs = sorted([p for p in root_path.iterdir() if p.is_dir()], key=lambda p: p.name)[:10]
                 for d in subdirs:
                     names.append(d.name)
+                    group_dirs.append(str(d))
                     files = [
                         p for p in d.iterdir()
                         if p.is_file() and p.suffix.lower() in [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]
                     ]
                     paths_by_group.append(files)
+                    # Load variables from any JSON files in the group folder
+                    group_vars_loaded = {}
+                    try:
+                        json_files = [p for p in d.iterdir() if p.is_file() and p.suffix.lower() == ".json"]
+                        for jf in json_files:
+                            try:
+                                with open(jf, "r", encoding="utf-8") as f:
+                                    data = json.load(f)
+                                if isinstance(data, dict):
+                                    for k, v in data.items():
+                                        if isinstance(v, (str, int, float, bool)):
+                                            group_vars_loaded[k] = str(v)
+                            except Exception:
+                                # Ignore malformed JSON per-file
+                                pass
+                        # If no JSON existed, create a default vars.json
+                        if not json_files:
+                            try:
+                                default_path = d / "vars.json"
+                                with open(default_path, "w", encoding="utf-8") as f:
+                                    json.dump({}, f, ensure_ascii=False, indent=2)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    vars_by_group.append(group_vars_loaded)
                 st.success(f"Loaded {len(names)} groups from {root_path}")
             else:
                 st.error("Folder not found or not a directory")
-                names, paths_by_group = [], []
+                names, paths_by_group, vars_by_group, group_dirs = [], [], [], []
             st.session_state["grid_loaded_group_names"] = names
             st.session_state["grid_loaded_group_paths"] = paths_by_group
+            st.session_state["grid_loaded_group_vars"] = vars_by_group
+            st.session_state["grid_loaded_group_dirs"] = group_dirs
             # Keep the number input in sync; safe here before widget instantiation
             st.session_state["grid_num_groups"] = max(1, min(10, len(names)))
 
@@ -632,7 +663,13 @@ def render_form(output_dir: Path) -> None:
         )
         if loaded_names_boot:
             st.info(f"Using {len(loaded_names_boot)} groups loaded from folder")
-        num_prompts = st.number_input("Number of prompts", min_value=1, max_value=10, value=3)
+        num_prompts = st.number_input("Number of prompts", min_value=1, max_value=100, value=3)
+        repeat_single_prompt = st.checkbox(
+            "Repeat single prompt across count",
+            value=bool(st.session_state.get("grid_prompt_repeat", False)),
+            key="grid_prompt_repeat",
+            help="체크 시 아래 입력란 하나만 사용하고, 해당 프롬프트를 지정한 횟수만큼 반복 실행합니다.",
+        )
         _model_lower = st.session_state.get("model", "seedream-4-0-250828").lower()
         seed_disabled = "seedream-4" in _model_lower
         seed_val = st.text_input("Seed (integer; fixed across grid)", value="12345", disabled=seed_disabled)
@@ -674,8 +711,12 @@ def render_form(output_dir: Path) -> None:
         prompts: List[str] = []
         st.markdown("**Prompts**")
         num_prompts_int = int(num_prompts)
-        for pi in range(num_prompts_int):
-            prompts.append(st.text_input(f"Prompt {pi+1}", key=f"grid_prompt_{pi}"))
+        if st.session_state.get("grid_prompt_repeat"):
+            single_prompt_val = st.text_area("Prompt", height=120, key="grid_prompt_single")
+            prompts = [single_prompt_val for _ in range(num_prompts_int)]
+        else:
+            for pi in range(num_prompts_int):
+                prompts.append(st.text_input(f"Prompt {pi+1}", key=f"grid_prompt_{pi}"))
 
         # Detect {variables} in prompts
         var_pattern = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
@@ -686,10 +727,10 @@ def render_form(output_dir: Path) -> None:
         group_uploads: List[List[Image.Image]] = []
         group_names: List[str] = []
 
-        # Common reference images (up to 5), inserted at indices 1..N for all groups
-        st.markdown("**Common references (0-5, inserted at indices starting from 1)**")
+        # Common reference images (up to 6), inserted at indices 1..N for all groups
+        st.markdown("**Common references (0-6, inserted at indices starting from 1)**")
         common_ref_files = st.file_uploader(
-            "Upload up to 5 common reference images",
+            "Upload up to 6 common reference images",
             type=["png", "jpg", "jpeg", "webp", "heic", "heif"],
             key="grid_common_ref",
             accept_multiple_files=True,
@@ -697,8 +738,8 @@ def render_form(output_dir: Path) -> None:
         common_ref_data_urls: List[str] = []
         if common_ref_files:
             import base64 as _b64tmp
-            cols_common = st.columns(5)
-            for i, f in enumerate(common_ref_files[:5]):
+            cols_common = st.columns(6)
+            for i, f in enumerate(common_ref_files[:6]):
                 try:
                     raw = f.getvalue() if hasattr(f, 'getvalue') else f.read()
                     ext = Path(getattr(f, 'name', 'ref')).suffix.lower()
@@ -733,6 +774,7 @@ def render_form(output_dir: Path) -> None:
 
         loaded_names: Optional[List[str]] = st.session_state.get("grid_loaded_group_names")
         loaded_paths: Optional[List[List[Path]]] = st.session_state.get("grid_loaded_group_paths")
+        loaded_vars_all: Optional[List[dict]] = st.session_state.get("grid_loaded_group_vars")
 
         num_groups_int = len(loaded_names) if loaded_names else int(num_groups)
         tabs_groups = st.tabs([
@@ -742,8 +784,75 @@ def render_form(output_dir: Path) -> None:
         group_vars_list: List[dict] = []
         for gi, tab in enumerate(tabs_groups):
             with tab:
-                default_name = loaded_names[gi] if loaded_names and gi < len(loaded_names) else f"group_{gi+1}"
-                gname = st.text_input(f"Group {gi+1} name", key=f"gname_{gi}", value=default_name)
+                # Header with group name on left and menu on right
+                cols_head = st.columns([0.8, 0.2])
+                with cols_head[0]:
+                    default_name = loaded_names[gi] if loaded_names and gi < len(loaded_names) else f"group_{gi+1}"
+                    gname = st.text_input(f"Group {gi+1} name", key=f"gname_{gi}", value=default_name)
+                with cols_head[1]:
+                    menu_container = None
+                    try:
+                        menu_container = st.popover("⋯", key=f"grp_menu_{gi}")
+                    except Exception:
+                        menu_container = st.expander("⋯", expanded=False)
+                    with menu_container:
+                        can_delete = bool(loaded_names) and len(loaded_names) > 1
+                        dup_clicked = st.button("Duplicate", key=f"grp_dup_{gi}")
+                        del_clicked = st.button("Delete", key=f"grp_del_{gi}", disabled=not can_delete)
+                        if dup_clicked and loaded_names is not None:
+                            try:
+                                names0 = list(st.session_state.get("grid_loaded_group_names", []))
+                                paths0 = [list(x) for x in st.session_state.get("grid_loaded_group_paths", [])]
+                                vars0 = [dict(x) if isinstance(x, dict) else {} for x in st.session_state.get("grid_loaded_group_vars", [])]
+                                dirs0 = list(st.session_state.get("grid_loaded_group_dirs", []))
+                                if gi < len(names0):
+                                    base = names0[gi]
+                                    candidate = f"{base}_copy"
+                                    if candidate in names0:
+                                        idx = 2
+                                        while f"{candidate}{idx}" in names0:
+                                            idx += 1
+                                        candidate = f"{candidate}{idx}"
+                                    names0.append(candidate)
+                                    paths0.append(list(paths0[gi]) if gi < len(paths0) else [])
+                                    vars0.append(dict(vars0[gi]) if gi < len(vars0) else {})
+                                    dirs0.append(dirs0[gi] if gi < len(dirs0) else "")
+                                    st.session_state["grid_loaded_group_names"] = names0
+                                    st.session_state["grid_loaded_group_paths"] = paths0
+                                    st.session_state["grid_loaded_group_vars"] = vars0
+                                    st.session_state["grid_loaded_group_dirs"] = dirs0
+                                    st.session_state["grid_num_groups"] = max(1, min(50, len(names0)))
+                            except Exception:
+                                pass
+                        if del_clicked and loaded_names is not None and can_delete:
+                            try:
+                                names0 = list(st.session_state.get("grid_loaded_group_names", []))
+                                paths0 = [list(x) for x in st.session_state.get("grid_loaded_group_paths", [])]
+                                vars0 = [dict(x) if isinstance(x, dict) else {} for x in st.session_state.get("grid_loaded_group_vars", [])]
+                                dirs0 = list(st.session_state.get("grid_loaded_group_dirs", []))
+                                if gi < len(names0):
+                                    names0.pop(gi)
+                                    if gi < len(paths0):
+                                        paths0.pop(gi)
+                                    if gi < len(vars0):
+                                        vars0.pop(gi)
+                                    if gi < len(dirs0):
+                                        dirs0.pop(gi)
+                                    st.session_state["grid_loaded_group_names"] = names0
+                                    st.session_state["grid_loaded_group_paths"] = paths0
+                                    st.session_state["grid_loaded_group_vars"] = vars0
+                                    st.session_state["grid_loaded_group_dirs"] = dirs0
+                                    # If none left, clear loaded state so manual groups can be used again
+                                    if len(names0) == 0:
+                                        st.session_state.pop("grid_loaded_group_names", None)
+                                        st.session_state.pop("grid_loaded_group_paths", None)
+                                        st.session_state.pop("grid_loaded_group_vars", None)
+                                        st.session_state.pop("grid_loaded_group_dirs", None)
+                                        st.session_state["grid_num_groups"] = 1
+                                    else:
+                                        st.session_state["grid_num_groups"] = max(1, min(50, len(names0)))
+                            except Exception:
+                                pass
                 files = None
                 preloaded_file_paths: Optional[List[Path]] = None
                 if loaded_paths and gi < len(loaded_paths):
@@ -759,8 +868,30 @@ def render_form(output_dir: Path) -> None:
                 group_vars: dict = {}
                 if vars_in_prompts:
                     st.caption("Group variables")
+                    loaded_defaults = {}
+                    if loaded_vars_all and gi < len(loaded_vars_all):
+                        try:
+                            loaded_defaults = loaded_vars_all[gi] or {}
+                        except Exception:
+                            loaded_defaults = {}
                     for var in vars_in_prompts:
-                        group_vars[var] = st.text_input(var, key=f"g{gi}_var_{var}")
+                        state_key = f"g{gi}_var_{var}"
+                        default_val = loaded_defaults.get(var)
+                        # Prefill when missing OR empty string
+                        if (state_key not in st.session_state) or (str(st.session_state.get(state_key, "")).strip() == ""):
+                            if default_val is not None:
+                                try:
+                                    st.session_state[state_key] = str(default_val)
+                                except Exception:
+                                    st.session_state[state_key] = ""
+                        value = st.text_input(var, key=state_key)
+                        # Effective value: user input if non-empty, else JSON default
+                        if isinstance(value, str) and value.strip() != "":
+                            group_vars[var] = value
+                        elif default_val is not None:
+                            group_vars[var] = str(default_val)
+                        else:
+                            group_vars[var] = ""
                 group_vars_list.append(group_vars)
                 group_names.append(gname)
                 imgs: List[Image.Image] = []
@@ -826,6 +957,36 @@ def render_form(output_dir: Path) -> None:
         grid_placeholder = st.empty()
 
         if run_grid:
+            # Immediately persist latest group variables to vars.json in each group folder
+            try:
+                group_dirs_saved: Optional[List[str]] = st.session_state.get("grid_loaded_group_dirs")
+                if group_dirs_saved and group_vars_list:
+                    for gi, gvars in enumerate(group_vars_list):
+                        try:
+                            gdir = Path(group_dirs_saved[gi]) if gi < len(group_dirs_saved) else None
+                            if not gdir or not gdir.exists() or not gdir.is_dir():
+                                continue
+                            vars_path = gdir / "vars.json"
+                            base = {}
+                            if vars_path.exists():
+                                try:
+                                    with open(vars_path, "r", encoding="utf-8") as f:
+                                        old = json.load(f)
+                                    if isinstance(old, dict):
+                                        base = {k: (str(v) if isinstance(v, (str, int, float, bool)) else "") for k, v in old.items()}
+                                except Exception:
+                                    base = {}
+                            merged = dict(base)
+                            for k, v in (gvars or {}).items():
+                                if v is None:
+                                    continue
+                                merged[k] = str(v)
+                            with open(vars_path, "w", encoding="utf-8") as f:
+                                json.dump(merged, f, ensure_ascii=False, indent=2)
+                        except Exception:
+                            continue
+            except Exception:
+                pass
             num_cols = len(group_names)
             total_cells = len(prompts) * max(1, num_cols)
             progress_start("Grid", total_cells)
